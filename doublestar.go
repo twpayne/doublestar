@@ -141,15 +141,16 @@ func splitAlternatives(s string) (ret []string, idx int) {
 		}
 
 		sRune, adj := utf8.DecodeRuneInString(s[idx:])
-		if esc {
+		switch {
+		case esc:
 			esc = false
-		} else if sRune == '\\' {
+		case sRune == '\\':
 			esc = true
-		} else if sRune == '{' {
+		case sRune == '{':
 			braceCnt++
-		} else if sRune == '}' {
+		case sRune == '}':
 			braceCnt--
-		} else if sRune == ',' && braceCnt == 1 {
+		case sRune == ',' && braceCnt == 1:
 			ret = append(ret, s[start:idx])
 			start = idx + adj
 		}
@@ -434,9 +435,16 @@ func doGlob(vos OS, basedir, pattern string, matches []string) (m []string, e er
 	if err != nil {
 		return
 	}
-	defer dir.Close()
+	defer func() {
+		if err := dir.Close(); e == nil {
+			e = err
+		}
+	}()
 
-	files, _ := dir.Readdir(-1)
+	files, err := dir.Readdir(-1)
+	if err != nil {
+		return nil, err
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
 
 	slashIdx := indexRuneWithEscaping(pattern, '/')
@@ -503,25 +511,28 @@ func matchComponent(pattern, name string) ([]string, error) {
 	// check for matches one rune at a time
 	patternLen, nameLen := len(pattern), len(name)
 	patIdx, nameIdx := 0, 0
+FOR:
 	for patIdx < patternLen && nameIdx < nameLen {
 		patRune, patAdj := utf8.DecodeRuneInString(pattern[patIdx:])
 		nameRune, nameAdj := utf8.DecodeRuneInString(name[nameIdx:])
-		if patRune == '/' {
+		switch patRune {
+		case '/':
 			patIdx++
-			break
-		} else if patRune == '\\' {
+			break FOR
+		case '\\':
 			// handle escaped runes, only if separator isn't '\\'
 			patIdx += patAdj
 			patRune, patAdj = utf8.DecodeRuneInString(pattern[patIdx:])
-			if patRune == utf8.RuneError {
+			switch patRune {
+			case utf8.RuneError:
 				return nil, ErrBadPattern
-			} else if patRune == nameRune {
+			case nameRune:
 				patIdx += patAdj
 				nameIdx += nameAdj
-			} else {
+			default:
 				return nil, nil
 			}
-		} else if patRune == '*' {
+		case '*':
 			// handle stars - a star at the end of the pattern or before a separator
 			// will always match the rest of the path component
 			if patIdx += patAdj; patIdx >= patternLen {
@@ -538,7 +549,7 @@ func matchComponent(pattern, name string) ([]string, error) {
 				}
 			}
 			return nil, nil
-		} else if patRune == '[' {
+		case '[':
 			// handle character sets
 			patIdx += patAdj
 			endClass := indexRuneWithEscaping(pattern[patIdx:], ']')
@@ -600,7 +611,7 @@ func matchComponent(pattern, name string) ([]string, error) {
 			}
 			patIdx = endClass + 1
 			nameIdx += nameAdj
-		} else if patRune == '{' {
+		case '{':
 			// handle alternatives such as {alt1,alt2,...}
 			patIdx += patAdj
 			options, endOptions := splitAlternatives(pattern[patIdx:])
@@ -630,11 +641,11 @@ func matchComponent(pattern, name string) ([]string, error) {
 			}
 
 			return nil, nil
-		} else if patRune == '?' || patRune == nameRune {
+		case '?', nameRune:
 			// handle single-rune wildcard
 			patIdx += patAdj
 			nameIdx += nameAdj
-		} else {
+		default:
 			return nil, nil
 		}
 	}
@@ -657,9 +668,8 @@ func matchComponent(pattern, name string) ([]string, error) {
 		if zeroLength {
 			if slashIdx == -1 {
 				return []string{}, nil
-			} else {
-				return []string{pattern[slashIdx+1:]}, nil
 			}
+			return []string{pattern[slashIdx+1:]}, nil
 		}
 	}
 	return nil, nil
